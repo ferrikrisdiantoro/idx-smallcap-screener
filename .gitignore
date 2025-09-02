@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.ipynb_checkpoints/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env & Secrets
+.env
+.env.*
+.venv
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
