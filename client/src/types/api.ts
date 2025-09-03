@@ -1,23 +1,37 @@
+// ==== Health ====
 export type HealthResp = {
-  status: string;
+  status?: string;
   has_model: boolean;
-  model_features: string[] | null;
+  model_features?: string[] | null;
   target: string | null;
   threshold_default?: number;
 };
 
+// ==== Tickers ====
 export type TickersResp = { tickers: string[] };
 
+// ==== Snapshot ====
 export type SnapshotResp = {
   date: string | null;
-  rows: Array<Record<string, any>>;
+  // hindari any
+  rows: Array<Record<string, unknown>>;
 };
 
-export type BrokerAggResp = {
+// ==== Broker Aggregation ====
+export interface BrokerAggRow {
+  symbol: string;
+  top_buyer: string | null;
+  top_buyer_concentration: number; // 0..1
+  top_buyer_net_value: number;
+  total_net_value: number;
+}
+
+export interface BrokerAggResp {
   date: string | null;
-  rows: Array<Record<string, any>>;
-};
+  rows: BrokerAggRow[];
+}
 
+// ==== Predict (kalau dipakai) ====
 export type PredictResp = {
   symbol: string;
   asof: string;
@@ -28,6 +42,7 @@ export type PredictResp = {
   features_used: string[];
 };
 
+// ==== Signals ====
 export type SignalsResp = {
   rows: {
     tanggal: string;
@@ -37,7 +52,7 @@ export type SignalsResp = {
     akumulasi_pct: number;
     distribusi_pct: number;
     alasan: string;
-    top_buyer?: string | null; // <— penting utk filter
+    top_buyer?: string | null;
   }[];
   from: string;
   to: string;

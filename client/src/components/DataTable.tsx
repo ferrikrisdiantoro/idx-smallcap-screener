@@ -1,40 +1,58 @@
+// src/components/DataTable.tsx
 "use client";
-import React, { useMemo, useState } from "react";
+
+import React, { ReactNode, useMemo, useState } from "react";
 import { toCSV } from "@/utils/format";
 
 type Props = {
   rows: Array<Record<string, unknown>>;
-  caption?: React.ReactNode;
+  caption?: ReactNode;
   searchable?: boolean;
   sortable?: boolean;
   exportable?: boolean;
   dense?: boolean;
 };
 
-const DataTable: React.FC<Props> = ({ rows, caption, searchable, sortable, exportable, dense }) => {
+const DataTable: React.FC<Props> = ({
+  rows,
+  caption,
+  searchable,
+  sortable,
+  exportable,
+  dense,
+}) => {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
-  if (!rows || rows.length === 0) return <div className="muted text-sm">Tidak ada data.</div>;
-
-  const cols = Object.keys(rows[0]);
+  // 👉 Semua hooks di top-level (tidak ada early return sebelum ini)
+  const cols = useMemo(
+    () => (rows && rows.length > 0 ? Object.keys(rows[0]) : []),
+    [rows]
+  );
 
   const filtered = useMemo(() => {
+    if (!rows || rows.length === 0) return [];
     if (!query.trim()) return rows;
     const q = query.toLowerCase();
-    return rows.filter(r => cols.some(c => String(r[c] ?? "").toLowerCase().includes(q)));
+    return rows.filter((r) =>
+      cols.some((c) => String(r[c] ?? "").toLowerCase().includes(q))
+    );
   }, [rows, query, cols]);
 
   const sorted = useMemo(() => {
     if (!sortable || !sortKey) return filtered;
     const copy = [...filtered];
     copy.sort((a, b) => {
-      const av = a[sortKey]; const bv = b[sortKey];
-      const na = Number(av); const nb = Number(bv);
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      const na = Number(av);
+      const nb = Number(bv);
       const bothNum = !Number.isNaN(na) && !Number.isNaN(nb);
       if (bothNum) return sortAsc ? na - nb : nb - na;
-      return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+      return sortAsc
+        ? String(av).localeCompare(String(bv))
+        : String(bv).localeCompare(String(av));
     });
     return copy;
   }, [filtered, sortKey, sortAsc, sortable]);
@@ -42,7 +60,10 @@ const DataTable: React.FC<Props> = ({ rows, caption, searchable, sortable, expor
   const onSort = (key: string) => {
     if (!sortable) return;
     if (sortKey === key) setSortAsc(!sortAsc);
-    else { setSortKey(key); setSortAsc(true); }
+    else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
   };
 
   return (
@@ -68,7 +89,9 @@ const DataTable: React.FC<Props> = ({ rows, caption, searchable, sortable, expor
                   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
-                  a.href = url; a.download = "table.csv"; a.click();
+                  a.href = url;
+                  a.download = "table.csv";
+                  a.click();
                   URL.revokeObjectURL(url);
                 }}
               >
@@ -79,6 +102,7 @@ const DataTable: React.FC<Props> = ({ rows, caption, searchable, sortable, expor
         </div>
       )}
 
+      {/* table */}
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -88,31 +112,45 @@ const DataTable: React.FC<Props> = ({ rows, caption, searchable, sortable, expor
                   key={c}
                   className="th"
                   onClick={() => onSort(c)}
-                  style={{ cursor: sortable ? "pointer" as const : "default" }}
+                  style={{ cursor: sortable ? ("pointer" as const) : ("default" as const) }}
                   title={sortable ? "Click to sort" : ""}
                 >
                   <div className="flex items-center gap-2">
                     <span className="capitalize">{c.replaceAll("_", " ")}</span>
-                    {sortable && sortKey === c && <span className="text-xs muted">{sortAsc ? "▲" : "▼"}</span>}
+                    {sortable && sortKey === c && (
+                      <span className="text-xs muted">{sortAsc ? "▲" : "▼"}</span>
+                    )}
                   </div>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {sorted.map((r, i) => (
-              <tr key={i} className={i % 2 ? "bg-slate-900/40" : ""}>
-                {cols.map((c) => (
-                  <td
-                    key={c}
-                    className={`td ${/^(close|volume|ret_|vol_|value|ratio|net|num|market_cap)/i.test(c) ? "num" : ""} ${dense ? "py-1.5" : ""}`}
-                    title={String(r[c] ?? "")}
-                  >
-                    {String(r[c] ?? "")}
-                  </td>
-                ))}
+            {sorted.length === 0 ? (
+              <tr>
+                <td className="td" colSpan={Math.max(cols.length, 1)}>
+                  Tidak ada data.
+                </td>
               </tr>
-            ))}
+            ) : (
+              sorted.map((r, i) => (
+                <tr key={i} className={i % 2 ? "bg-slate-900/40" : ""}>
+                  {cols.map((c) => (
+                    <td
+                      key={c}
+                      className={`td ${
+                        /^(close|volume|ret_|vol_|value|ratio|net|num|market_cap)/i.test(c)
+                          ? "num"
+                          : ""
+                      } ${dense ? "py-1.5" : ""}`}
+                      title={String(r[c] ?? "")}
+                    >
+                      {String(r[c] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
