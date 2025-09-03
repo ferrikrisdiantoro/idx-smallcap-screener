@@ -1,6 +1,4 @@
 "use client";
-import React from "react";
-
 export default function MetricCard({ title, value, subtitle }: { title: string; value: string | number; subtitle?: string }) {
   return (
     <div className="card card-pad">

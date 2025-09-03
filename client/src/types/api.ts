@@ -3,7 +3,7 @@ export type HealthResp = {
   has_model: boolean;
   model_features: string[] | null;
   target: string | null;
-  threshold_default?: number; // <— baru
+  threshold_default?: number;
 };
 
 export type TickersResp = { tickers: string[] };
@@ -26,4 +26,20 @@ export type PredictResp = {
   threshold_used: number;
   target: string;
   features_used: string[];
+};
+
+export type SignalsResp = {
+  rows: {
+    tanggal: string;
+    saham: string;
+    sinyal: "BELI" | "JUAL KUAT";
+    harga: number;
+    akumulasi_pct: number;
+    distribusi_pct: number;
+    alasan: string;
+    top_buyer?: string | null; // <— penting utk filter
+  }[];
+  from: string;
+  to: string;
+  threshold: number;
 };

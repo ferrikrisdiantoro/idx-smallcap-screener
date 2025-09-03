@@ -69,9 +69,9 @@ export default function Page() {
       setAgg(a);
 
       // filter lokal (broker/harga)
-      let out = sig.rows as SignalRow[];
+      let out = (sig.rows as unknown as SignalRow[]);
       if (broker !== "Semua Broker") {
-        out = out.filter(r => r.alasan.includes(`Broker ${broker}`));
+        out = out.filter(r => (r.top_buyer ?? "") === broker);
       }
       if (priceValue !== "") {
         out = out.filter(r =>
@@ -94,7 +94,7 @@ export default function Page() {
             <p className="mt-1 text-sm">Data Terakhir Diperbarui Pada: <span className="font-medium">{snap?.date ?? "—"}</span></p>
           </div>
           <div className="text-right">
-            <div className="text-xs uppercase text-slate-500">Waktu Server (WITA)</div>
+            <div className="text-xs uppercase text-slate-500">Waktu Lokal</div>
             <div className="text-2xl font-semibold tabular-nums"><Clock /></div>
           </div>
         </div>

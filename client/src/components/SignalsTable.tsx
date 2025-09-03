@@ -9,6 +9,7 @@ export type SignalRow = {
   akumulasi_pct: number;
   distribusi_pct: number;
   alasan: string;
+  top_buyer?: string | null; // <— tambahan
 };
 
 function Badge({ type }: { type: SignalRow["sinyal"] }) {
@@ -24,7 +25,8 @@ export default function SignalsTable({ rows, loading }: { rows: SignalRow[]; loa
     if (!key) return rows;
     return rows.filter(r =>
       r.saham.toLowerCase().includes(key) ||
-      r.alasan.toLowerCase().includes(key)
+      r.alasan.toLowerCase().includes(key) ||
+      String(r.top_buyer ?? "").toLowerCase().includes(key)
     );
   }, [rows, q]);
 
@@ -34,7 +36,7 @@ export default function SignalsTable({ rows, loading }: { rows: SignalRow[]; loa
         <div className="text-sm font-semibold">Daftar Sinyal</div>
         <div className="flex items-center gap-2">
           <input
-            placeholder="Cari saham / alasan…"
+            placeholder="Cari saham / alasan / broker…"
             className="input w-64"
             value={q}
             onChange={(e) => setQ(e.target.value)}

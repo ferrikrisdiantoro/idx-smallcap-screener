@@ -1,4 +1,4 @@
-import type { HealthResp, SnapshotResp, BrokerAggResp } from "@/types/api";
+import type { HealthResp, SnapshotResp, BrokerAggResp, SignalsResp } from "@/types/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -16,21 +16,6 @@ export const apiSnapshot = (date?: string) =>
   getJson<SnapshotResp>(date ? `/snapshot?date=${date}` : `/snapshot`);
 export const apiBrokerAgg = (date?: string) =>
   getJson<BrokerAggResp>(date ? `/broker-agg?date=${date}` : `/broker-agg`);
-
-export type SignalsResp = {
-  rows: {
-    tanggal: string;
-    saham: string;
-    sinyal: "BELI" | "JUAL KUAT";
-    harga: number;
-    akumulasi_pct: number;
-    distribusi_pct: number;
-    alasan: string;
-  }[];
-  from: string;
-  to: string;
-  threshold: number;
-};
 
 export const apiSignals = (from: string, to: string, threshold: number) =>
   getJson<SignalsResp>(`/signals?from=${from}&to=${to}&threshold=${threshold}`);
