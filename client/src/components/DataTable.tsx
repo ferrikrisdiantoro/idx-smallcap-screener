@@ -1,8 +1,7 @@
-// src/components/DataTable.tsx
 "use client";
 
 import React, { ReactNode, useMemo, useState } from "react";
-import { toCSV } from "@/utils/format";
+import { saveAs } from "@/lib/saveCsv";
 
 type Props = {
   rows: Array<Record<string, unknown>>;
