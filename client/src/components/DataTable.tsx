@@ -1,10 +1,12 @@
 "use client";
 
 import React, { ReactNode, useMemo, useState } from "react";
-import { saveAs } from "@/lib/saveCsv";
+import { toCSV, saveAs } from "@/lib/saveCsv";
+
+type Row = Record<string, unknown>;
 
 type Props = {
-  rows: Array<Record<string, unknown>>;
+  rows: Row[];
   caption?: ReactNode;
   searchable?: boolean;
   sortable?: boolean;
@@ -24,7 +26,7 @@ const DataTable: React.FC<Props> = ({
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
-  // 👉 Semua hooks di top-level (tidak ada early return sebelum ini)
+  // kolom diambil dari row pertama
   const cols = useMemo(
     () => (rows && rows.length > 0 ? Object.keys(rows[0]) : []),
     [rows]
@@ -50,15 +52,15 @@ const DataTable: React.FC<Props> = ({
       const bothNum = !Number.isNaN(na) && !Number.isNaN(nb);
       if (bothNum) return sortAsc ? na - nb : nb - na;
       return sortAsc
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
+        ? String(av ?? "").localeCompare(String(bv ?? ""))
+        : String(bv ?? "").localeCompare(String(av ?? ""));
     });
     return copy;
   }, [filtered, sortKey, sortAsc, sortable]);
 
   const onSort = (key: string) => {
     if (!sortable) return;
-    if (sortKey === key) setSortAsc(!sortAsc);
+    if (sortKey === key) setSortAsc((v) => !v);
     else {
       setSortKey(key);
       setSortAsc(true);
@@ -84,14 +86,8 @@ const DataTable: React.FC<Props> = ({
               <button
                 className="h-9 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm hover:bg-slate-800"
                 onClick={() => {
-                  const csv = toCSV(sorted);
-                  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = "table.csv";
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  const csv = toCSV(sorted, cols);
+                  saveAs(csv, "table.csv");
                 }}
               >
                 Export CSV
