@@ -13,7 +13,6 @@ export type TickersResp = { tickers: string[] };
 // ==== Snapshot ====
 export type SnapshotResp = {
   date: string | null;
-  // hindari any
   rows: Array<Record<string, unknown>>;
 };
 
@@ -33,12 +32,12 @@ export interface BrokerAggResp {
 
 // ==== Predict (kalau dipakai) ====
 export type PredictResp = {
-  symbol: string;
-  asof: string;
+  symbol?: string;
+  asof?: string;
   prob_up: number;
   label: number;
   threshold_used: number;
-  target: string;
+  target?: string;
   features_used: string[];
 };
 
@@ -57,4 +56,21 @@ export type SignalsResp = {
   from: string;
   to: string;
   threshold: number;
+};
+
+// ==== Explain (NEW) ====
+export type ExplainResp = {
+  symbol: string;
+  date: string;
+  close: number;
+  ret_1: number;
+  vol_ratio: number;
+  top_buyer: string | null;
+  top_buyer_concentration: number;
+  total_net_value: number;
+  prob_up: number;
+  label: number;
+  threshold_used: number;
+  reason_simple: string;
+  bullets: string[];
 };

@@ -121,10 +121,23 @@ def build_snapshot_for(date_str: str):
 
     if frames:
         prices_all = pd.concat(frames, ignore_index=True)
+        # pastikan kolom date bisa di-parse meski dari vendor/ingest baru
+        if "date" not in prices_all.columns:
+            raise RuntimeError("Kolom 'date' tidak ditemukan di prices_.csv")
         feats = compute_features(prices_all)
-        asof = pd.to_datetime(date_str)
-        sub = feats[feats["date"] == asof].copy()
+        asof = pd.to_datetime(date_str).normalize()
 
+        # PILIH BAR TERAKHIR ≤ ASOF PER SIMBOL (bukan strict equal)
+        sub = (feats[feats["date"] <= asof]
+               .sort_values(["symbol","date"])
+               .groupby("symbol", as_index=False)
+               .tail(1)
+              ).copy()
+
+        # set effective date = asof untuk konsistensi nama file
+        sub["date"] = asof
+
+        # join broker agg (≤ tanggal)
         agg_path, _eff = find_agg_on_or_before(date_str)
         if agg_path:
             agg = pd.read_csv(agg_path)

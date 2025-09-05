@@ -9,7 +9,6 @@ import SignalsTable, { SignalRow } from "@/components/SignalsTable";
 import MetricCard from "@/components/MetricCard";
 import type { BrokerAggResp, SnapshotResp } from "@/types/api";
 
-// alias tipe supaya tidak pakai `any`
 type BrokerRow = BrokerAggResp["rows"][number];
 
 export default function Page() {
@@ -19,13 +18,20 @@ export default function Page() {
   const [snap, setSnap] = useState<SnapshotResp | null>(null);
   const [agg, setAgg] = useState<BrokerAggResp | null>(null);
 
-  // filters
+  // filters (state)
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [broker, setBroker] = useState<string>("Semua Broker");
   const [priceCond, setPriceCond] = useState<"diatas" | "dibawah">("diatas");
   const [priceValue, setPriceValue] = useState<number | "">("");
+  // threshold disimpan 0..1 (Filters menampilkan dalam % dan konversi balik ke 0..1)
   const [threshold, setThreshold] = useState<number>(0.35);
+
+  // NEW
+  const [signal, setSignal] = useState<"Semua" | "BELI" | "JUAL">("Semua");
+  const [symbolExact, setSymbolExact] = useState<string>("");
+  const [sortDate, setSortDate] = useState<"desc" | "asc">("desc");
+  const [volRatioMin, setVolRatioMin] = useState<number | "">("");
 
   const [activeTab, setActiveTab] = useState<"backtest" | "broker">("backtest");
 
@@ -34,8 +40,10 @@ export default function Page() {
       setLoading(true);
       const [h, s, a] = await Promise.all([apiHealth(), apiSnapshot(), apiBrokerAgg()]);
       setHasModel(h.has_model);
-      setTarget(h.target);
-      setThreshold(h.threshold_default ?? 0.35);
+      setTarget(h.target ?? null);
+      // PERBAIKAN: clamp threshold_default dari backend (hindari 0)
+      const td = Number(h.threshold_default);
+      setThreshold(Number.isFinite(td) && td > 0 && td <= 1 ? td : 0.35);
       setSnap(s);
       setAgg(a);
       if (s?.date) {
@@ -71,18 +79,27 @@ export default function Page() {
         return;
       }
 
+      // PERBAIKAN: clamp threshold sebelum kirim (0..1, minimal 0.01)
+      const thr = Number.isFinite(threshold) && threshold > 0 ? Math.min(threshold, 1) : 0.35;
+
+      // panggil API dgn 3 argumen saja (backend expect 0..1 untuk threshold)
       const [sig, s, a] = await Promise.all([
-        apiSignals(from, to, threshold),
+        apiSignals(from, to, thr),
         apiSnapshot(to),
         apiBrokerAgg(to),
       ]);
       setSnap(s);
       setAgg(a);
 
+      // Terapkan filter di client
       let out = sig.rows as unknown as SignalRow[];
+
+      // Filter broker
       if (broker !== "Semua Broker") {
         out = out.filter((r) => (r.top_buyer ?? "") === broker);
       }
+
+      // Filter harga
       if (priceValue !== "") {
         out = out.filter((r) =>
           priceCond === "diatas"
@@ -90,7 +107,33 @@ export default function Page() {
             : r.harga <= Number(priceValue)
         );
       }
+
+      // Filter sinyal (BELI/JUAL KUAT)
+      if (signal !== "Semua") {
+        out = out.filter((r) =>
+          signal === "BELI" ? r.sinyal === "BELI" : r.sinyal === "JUAL KUAT"
+        );
+      }
+
+      // Filter emiten exact
+      if (symbolExact.trim()) {
+        const want = symbolExact.trim().toUpperCase();
+        out = out.filter((r) => r.saham.toUpperCase() === want);
+      }
+
+      // (Optional) volRatioMin — saat backend menambahkan field ini, aktifkan filter-nya di sini.
+
+      // Urutkan tanggal
+      out = [...out].sort((a, b) =>
+        sortDate === "asc"
+          ? a.tanggal.localeCompare(b.tanggal)
+          : b.tanggal.localeCompare(a.tanggal)
+      );
+
       setRows(out);
+    } catch (e) {
+      console.error(e);
+      setRows([]);
     } finally {
       setBusyApply(false);
     }
@@ -162,19 +205,31 @@ export default function Page() {
             brokerOptions={brokerOpts}
             priceCond={priceCond}
             priceValue={priceValue}
-            threshold={threshold}
+            threshold={threshold} // 0..1
+            signal={signal}
+            symbolExact={symbolExact}
+            sortDate={sortDate}
+            volRatioMin={volRatioMin}
             setDateFrom={setDateFrom}
             setDateTo={setDateTo}
             setBroker={setBroker}
             setPriceCond={setPriceCond}
             setPriceValue={setPriceValue}
             setThreshold={setThreshold}
+            setSignal={setSignal}
+            setSymbolExact={setSymbolExact}
+            setSortDate={setSortDate}
+            setVolRatioMin={setVolRatioMin}
             onApply={applyFilters}
             onReset={() => {
               setBroker("Semua Broker");
               setPriceCond("diatas");
               setPriceValue("");
               setThreshold(0.35);
+              setSignal("Semua");
+              setSymbolExact("");
+              setSortDate("desc");
+              setVolRatioMin("");
               setRows([]);
             }}
             busy={busyApply}

@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import Link from "next/link";
 
 export type SignalRow = {
   tanggal: string;
@@ -9,7 +10,7 @@ export type SignalRow = {
   akumulasi_pct: number;
   distribusi_pct: number;
   alasan: string;
-  top_buyer?: string | null; // <— tambahan
+  top_buyer?: string | null;
 };
 
 function Badge({ type }: { type: SignalRow["sinyal"] }) {
@@ -66,11 +67,15 @@ export default function SignalsTable({ rows, loading }: { rows: SignalRow[]; loa
               filtered.map((r, i) => (
                 <tr key={i} className="hover:bg-slate-50">
                   <td className="td">{r.tanggal}</td>
-                  <td className="td font-medium">{r.saham}</td>
+                  <td className="td font-medium">
+                    <Link href={`/detail/${r.saham}?date=${encodeURIComponent(r.tanggal)}`} className="text-emerald-700 hover:underline">
+                      {r.saham}
+                    </Link>
+                  </td>
                   <td className="td"><Badge type={r.sinyal} /></td>
-                  <td className="td td-num">{r.harga.toLocaleString("id-ID")}</td>
-                  <td className="td td-num">{r.akumulasi_pct.toFixed(1)}%</td>
-                  <td className="td td-num">{r.distribusi_pct.toFixed(1)}%</td>
+                  <td className="td td-num">{Number(r.harga ?? 0).toLocaleString("id-ID")}</td>
+                  <td className="td td-num">{Number(r.akumulasi_pct ?? 0).toFixed(1)}%</td>
+                  <td className="td td-num">{Number(r.distribusi_pct ?? 0).toFixed(1)}%</td>
                   <td className="td text-slate-700">{r.alasan}</td>
                 </tr>
               ))

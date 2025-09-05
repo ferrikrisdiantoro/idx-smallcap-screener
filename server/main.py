@@ -1,14 +1,15 @@
 # main.py
 # ============================================
 # IDX Up-Move Predictor API (stable JSON + signals)
-# - Safe JSONResponse (NaN/NumPy friendly)
+# - Safe JSONResponse (sanitize deep: NaN/Inf → null, numpy/pandas -> python)
 # - /signals menjamin angka selalu numeric (fallback 0)
-# - kirim top_buyer untuk filter broker di UI
+# - Perbaikan: clamp threshold, filter close<=0, matikan merge broker_agg stale
 # ============================================
 
 from __future__ import annotations
 import os, glob, json
 from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -20,25 +21,57 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# ---------- Safe JSONResponse (kebal NaN/NumPy) ----------
+# ---------- Deep sanitizer ----------
+def _sanitize_json(obj):
+    """Recursively sanitize any object into JSON-safe types:
+       - numpy scalars -> python
+       - pandas Timestamps -> isoformat string
+       - float NaN/±Inf -> None
+       - sets/tuples -> lists
+       - dict/list -> deep-sanitized
+    """
+    # numpy scalars
+    if isinstance(obj, (np.integer, np.bool_)):
+        return obj.item()
+    if isinstance(obj, np.floating):
+        x = float(obj)
+        if not np.isfinite(x):
+            return None
+        return x
+
+    # plain floats
+    if isinstance(obj, float):
+        if not np.isfinite(obj):
+            return None
+        return obj
+
+    # pandas timey / datetime
+    if isinstance(obj, (pd.Timestamp, pd.Timedelta, datetime)):
+        try:
+            return obj.isoformat()
+        except Exception:
+            return str(obj)
+
+    # pandas NA-like
+    try:
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+
+    # containers
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_sanitize_json(v) for v in obj]
+
+    return obj
+
 class SafeJSONResponse(JSONResponse):
     def render(self, content) -> bytes:
-        def default(o):
-            # NumPy scalars → Python
-            if isinstance(o, (np.floating, np.integer, np.bool_)):
-                return o.item()
-            # Pandas timey
-            if isinstance(o, (pd.Timestamp, pd.Timedelta)):
-                return o.isoformat()
-            # NaN/NaT → None
-            try:
-                if pd.isna(o):
-                    return None
-            except Exception:
-                pass
-            return str(o)
-        # allow_nan=True mencegah crash kalau ada sisa NaN
-        return json.dumps(content, ensure_ascii=False, allow_nan=True, default=default).encode("utf-8")
+        clean = _sanitize_json(content)
+        # allow_nan=False memastikan tidak ada token NaN/Infinity muncul
+        return json.dumps(clean, ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 # ---------- Config ----------
 load_dotenv()
@@ -54,7 +87,7 @@ PREDICT_BATCH_LIMIT = int(os.environ.get("PREDICT_BATCH_LIMIT", "5000"))
 
 app = FastAPI(
     title="IDX Up-Move Predictor API",
-    version="0.4.3",
+    version="0.4.5",
     default_response_class=SafeJSONResponse,
 )
 app.add_middleware(
@@ -155,8 +188,14 @@ def predict_batch_from_snapshot(
         raise RuntimeError("Model belum dimuat.")
     if snap_df is None or snap_df.empty:
         return pd.DataFrame(columns=["symbol", "asof", "prob_up", "label"])
+
     df = snap_df.copy()
     df["symbol"] = df["symbol"].astype(str).str.upper()
+
+    # --- PERBAIKAN: filter bar tidak valid (close<=0 / NaN) ---
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df[df["close"].notna() & (df["close"] > 0)]
+
     if symbols:
         want = [s.upper() for s in symbols]
         df = df[df["symbol"].isin(want)]
@@ -179,12 +218,20 @@ def predict_batch_from_snapshot(
 # ---------- Routes ----------
 @app.get("/health")
 def health():
+    # PERBAIKAN: clamp threshold_default supaya tidak 0
+    if ART is not None:
+        td = float(ART.get("threshold_default", THRESHOLD_DEFAULT))
+    else:
+        td = THRESHOLD_DEFAULT
+    if not (0.0 < td <= 1.0):
+        td = THRESHOLD_DEFAULT if (0.0 < THRESHOLD_DEFAULT <= 1.0) else 0.35
+
     return {
         "status": "ok",
         "has_model": ART is not None,
         "model_features": (ART.get("features") if ART else None),
         "target": (ART.get("target") if ART else None),
-        "threshold_default": float(ART.get("threshold_default", THRESHOLD_DEFAULT)) if ART else THRESHOLD_DEFAULT,
+        "threshold_default": td,
         "predict_batch_limit": PREDICT_BATCH_LIMIT,
     }
 
@@ -220,7 +267,10 @@ def broker_agg(date: Optional[str] = Query(default=None, description="YYYY-MM-DD
     df = pd.read_csv(path)
     return {"date": eff, "rows": safe_rows(df)}
 
-@app.get("/predict", response_model=PredictGetOut)
+class _PredictGetResponse(PredictGetOut):
+    pass
+
+@app.get("/predict", response_model=_PredictGetResponse)
 def predict_get(
     symbol: str = Query(..., description="Ticker, mis. BBCA"),
     asof: Optional[str] = Query(None, description="YYYY-MM-DD (opsional)"),
@@ -244,12 +294,13 @@ def predict_get(
     if sub.empty:
         raise HTTPException(400, f"Symbol {sym} tidak ada di snapshot.")
     row = sub.iloc[-1].to_dict()
-    thr = float(threshold if threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT))
+    thr_raw = threshold if threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT)
+    thr = float(max(0.01, min(1.0, thr_raw)))
     feats = build_feature_row_from_snapshot_row(row)
     X = np.array([[feats[f] for f in ART["features"]]], dtype=float)
     proba = float(_clf_proba(ART["model"], X)[0])
     label = int(proba >= thr)
-    return PredictGetOut(
+    return _PredictGetResponse(
         symbol=sym,
         asof=str(row.get("date")),
         prob_up=proba,
@@ -263,7 +314,8 @@ def predict_get(
 def predict_post(payload: PredictIn):
     if ART is None:
         raise HTTPException(503, "Model belum tersedia.")
-    thr = float(payload.threshold if payload.threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT))
+    thr_raw = payload.threshold if payload.threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT)
+    thr = float(max(0.01, min(1.0, thr_raw)))
     row = [float(payload.features.get(f, 0.0) or 0.0) for f in ART["features"]]
     X = np.array([row], dtype=float)
     proba = float(_clf_proba(ART["model"], X)[0])
@@ -289,7 +341,8 @@ def predict_batch(payload: PredictBatchIn):
     if not path:
         raise HTTPException(404, "Snapshot tidak ditemukan.")
     snap = pd.read_csv(path)
-    thr = float(payload.threshold if payload.threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT))
+    thr_raw = payload.threshold if payload.threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT)
+    thr = float(max(0.01, min(1.0, thr_raw)))
     pred = predict_batch_from_snapshot(snap, threshold=thr, symbols=payload.symbols)
     return {"rows": safe_rows(pred), "asof": os.path.basename(path)[15:-4], "threshold": thr}
 
@@ -302,11 +355,13 @@ def signals(
 ):
     """
     Sapu snapshot per-hari di rentang [from..to], hitung sinyal dengan batch predict,
-    dan join broker_agg (≤ tanggal tsb) bila ada.
+    dan join broker_agg (hanya jika tanggalnya SAMA) bila ada.
     Nilai akumulasi/distribusi DIJAMIN numeric (fallback 0.0).
     """
     if ART is None:
         return {"rows": [], "from": date_from, "to": date_to, "threshold": threshold}
+
+    thr = float(max(0.01, min(1.0, threshold)))  # PERBAIKAN: clamp supaya tidak 0
 
     dates = pd.date_range(pd.to_datetime(date_from), pd.to_datetime(date_to), freq="D")
     all_rows: List[Dict[str, Any]] = []
@@ -322,34 +377,35 @@ def signals(
             continue
         snap["symbol"] = snap["symbol"].astype(str).str.upper()
 
-        # join broker_agg (fallback ≤ tanggal)
-        agg_path, _eff = find_agg_on_or_before(dstr)
-        agg = pd.read_csv(agg_path) if agg_path else pd.DataFrame()
-        if not agg.empty and "symbol" in agg.columns:
-            agg["symbol"] = agg["symbol"].astype(str).str.upper()
-            snap = snap.merge(agg, on="symbol", how="left", suffixes=("", "_agg"))
+        # --- PERBAIKAN: filter bar tidak valid untuk prediksi
+        snap["close"] = pd.to_numeric(snap["close"], errors="coerce")
+        snap = snap[snap["close"].notna() & (snap["close"] > 0)]
 
-        # batasi jumlah simbol per-hari
+        # join broker_agg hanya jika tanggalnya SAMA (hindari fitur stale)
+        agg_path, eff = find_agg_on_or_before(dstr)
+        if agg_path and eff == dstr:
+            agg = pd.read_csv(agg_path)
+            if not agg.empty and "symbol" in agg.columns:
+                agg["symbol"] = agg["symbol"].astype(str).str.upper()
+                snap = snap.merge(agg, on="symbol", how="left", suffixes=("", "_agg"))
+
         uniq = snap["symbol"].unique().tolist()[:limit_per_day]
         sub = snap[snap["symbol"].isin(uniq)].copy()
 
-        # batch predict
-        pred = predict_batch_from_snapshot(sub, threshold=threshold, symbols=None)
+        pred = predict_batch_from_snapshot(sub, threshold=thr, symbols=None)
         pred = pred.merge(sub, on=["symbol"], how="left")
 
-        # compose output rows (sinyal BUY/JUAL KUAT saja)
         for _, r in pred.iterrows():
             sig = "BELI"
             try:
                 if float(r.get("ret_1", 0) or 0) <= -0.05:
                     sig = "JUAL KUAT"
-                elif float(r["prob_up"]) < float(threshold):
+                elif float(r["prob_up"]) < thr:
                     continue
             except Exception:
-                if float(r["prob_up"]) < float(threshold):
+                if float(r["prob_up"]) < thr:
                     continue
 
-            # --- aman-kan angka agar tidak NaN/null di JSON ---
             tb_conc_raw = r.get("top_buyer_concentration", 0)
             try:
                 tb_conc = float(tb_conc_raw) if not pd.isna(tb_conc_raw) else 0.0
@@ -376,8 +432,8 @@ def signals(
                 "saham": str(r["symbol"]),
                 "sinyal": sig,
                 "harga": harga,
-                "akumulasi_pct": akum,          # <- DIJAMIN NUMBER
-                "distribusi_pct": dist,         # <- DIJAMIN NUMBER
+                "akumulasi_pct": akum,
+                "distribusi_pct": dist,
                 "alasan": alasan,
                 "top_buyer": (None if pd.isna(r.get("top_buyer")) else str(r.get("top_buyer"))),
             })
@@ -387,5 +443,5 @@ def signals(
         "rows": safe_rows(out) if not out.empty else [],
         "from": date_from,
         "to": date_to,
-        "threshold": threshold,
+        "threshold": thr,
     }
