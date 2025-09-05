@@ -1,9 +1,9 @@
 # main.py
 # ============================================
-# IDX Up-Move Predictor API (stable JSON + signals)
+# IDX Up-Move Predictor API (stable JSON + signals + explain)
 # - Safe JSONResponse (sanitize deep: NaN/Inf → null, numpy/pandas -> python)
 # - /signals menjamin angka selalu numeric (fallback 0)
-# - Perbaikan: clamp threshold, filter close<=0, matikan merge broker_agg stale
+# - /explain memberi alasan sederhana + parameter (volume & broker)
 # ============================================
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ PREDICT_BATCH_LIMIT = int(os.environ.get("PREDICT_BATCH_LIMIT", "5000"))
 
 app = FastAPI(
     title="IDX Up-Move Predictor API",
-    version="0.4.5",
+    version="0.4.6",
     default_response_class=SafeJSONResponse,
 )
 app.add_middleware(
@@ -137,6 +137,33 @@ def load_artifact():
     return joblib.load(MODEL_PATH)
 
 ART = load_artifact()  # {"model","features","target","threshold_default",...}
+
+# === NEW: cari snapshot tepat tanggal atau terakhir ≤ tanggal ===
+def find_snapshot_on_or_before(date_str: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Cari file daily_snapshot_YYYY-MM-DD.csv tepat pada 'date_str'.
+    Kalau tidak ada, pilih snapshot terakhir yang <= date_str.
+    Return: (path, effective_date) atau (None, None) bila tidak ada.
+    """
+    files = sorted(glob.glob(os.path.join(DATA_DIR, "daily_snapshot_*.csv")))
+    if not files:
+        return None, None
+    if not date_str:
+        path = files[-1]
+        eff = os.path.basename(path)[15:-4]
+        return path, eff
+    tgt = pd.to_datetime(date_str).date()
+    cand: list[tuple[pd.Timestamp, str]] = []
+    for p in files:
+        d = pd.to_datetime(os.path.basename(p)[15:-4]).date()
+        if d <= tgt:
+            cand.append((pd.Timestamp(d), p))
+    if not cand:
+        return None, None
+    cand.sort()
+    path = cand[-1][1]
+    eff  = os.path.basename(path)[15:-4]
+    return path, eff
 
 # ---------- Schemas ----------
 class PredictIn(BaseModel):
@@ -192,7 +219,7 @@ def predict_batch_from_snapshot(
     df = snap_df.copy()
     df["symbol"] = df["symbol"].astype(str).str.upper()
 
-    # --- PERBAIKAN: filter bar tidak valid (close<=0 / NaN) ---
+    # --- filter bar tidak valid (close<=0 / NaN) ---
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df = df[df["close"].notna() & (df["close"] > 0)]
 
@@ -218,7 +245,7 @@ def predict_batch_from_snapshot(
 # ---------- Routes ----------
 @app.get("/health")
 def health():
-    # PERBAIKAN: clamp threshold_default supaya tidak 0
+    # clamp threshold_default supaya tidak 0
     if ART is not None:
         td = float(ART.get("threshold_default", THRESHOLD_DEFAULT))
     else:
@@ -361,7 +388,7 @@ def signals(
     if ART is None:
         return {"rows": [], "from": date_from, "to": date_to, "threshold": threshold}
 
-    thr = float(max(0.01, min(1.0, threshold)))  # PERBAIKAN: clamp supaya tidak 0
+    thr = float(max(0.01, min(1.0, threshold)))  # clamp supaya tidak 0
 
     dates = pd.date_range(pd.to_datetime(date_from), pd.to_datetime(date_to), freq="D")
     all_rows: List[Dict[str, Any]] = []
@@ -377,7 +404,7 @@ def signals(
             continue
         snap["symbol"] = snap["symbol"].astype(str).str.upper()
 
-        # --- PERBAIKAN: filter bar tidak valid untuk prediksi
+        # filter bar tidak valid untuk prediksi
         snap["close"] = pd.to_numeric(snap["close"], errors="coerce")
         snap = snap[snap["close"].notna() & (snap["close"] > 0)]
 
@@ -444,4 +471,147 @@ def signals(
         "from": date_from,
         "to": date_to,
         "threshold": thr,
+    }
+
+# === NEW: EXPLAIN endpoint ===
+@app.get("/explain")
+def explain(
+    symbol: str = Query(..., description="Ticker, mis. BBCA"),
+    date: Optional[str] = Query(None, description="YYYY-MM-DD (opsional)"),
+    threshold: Optional[float] = Query(None, ge=0, le=1),
+):
+    """
+    Penjelasan ringkas: keputusan (BELI/JUAL/TIDAK ADA SINYAL) + parameter kunci
+    seperti vol_ratio dan konsentrasi top buyer pada tanggal yang diminta.
+    """
+    sym = symbol.strip().upper()
+
+    # pilih snapshot (tepat date; jika tak ada → terakhir ≤ date; jika date None → latest)
+    path, eff_date = (None, None)
+    if date:
+        cand = os.path.join(DATA_DIR, f"daily_snapshot_{date}.csv")
+        if os.path.exists(cand):
+            path, eff_date = cand, date
+        else:
+            path, eff_date = find_snapshot_on_or_before(date)
+    else:
+        path, eff_date = find_snapshot_on_or_before(None)
+
+    if not path:
+        raise HTTPException(404, f"Snapshot tidak ditemukan (date={date or 'latest'}).")
+
+    df = pd.read_csv(path)
+    if df.empty or "symbol" not in df.columns:
+        raise HTTPException(404, "Snapshot kosong atau tidak valid.")
+    df["symbol"] = df["symbol"].astype(str).str.upper()
+
+    row_df = df[df["symbol"] == sym]
+    if row_df.empty:
+        raise HTTPException(400, f"Symbol {sym} tidak ada di snapshot {eff_date}.")
+
+    row = row_df.iloc[-1].to_dict()
+
+    # broker agg HANYA jika tanggalnya sama persis
+    top_buyer = row.get("top_buyer")
+    top_buyer_conc = row.get("top_buyer_concentration")
+    total_net_value = row.get("total_net_value")
+
+    if (pd.isna(top_buyer) or "top_buyer" not in row_df.columns) and eff_date:
+        agg_path, agg_eff = find_agg_on_or_before(eff_date)
+        if agg_path and agg_eff == eff_date:
+            agg = pd.read_csv(agg_path)
+            if "symbol" in agg.columns:
+                agg["symbol"] = agg["symbol"].astype(str).str.upper()
+                a = agg[agg["symbol"] == sym]
+                if not a.empty:
+                    arow = a.iloc[-1].to_dict()
+                    top_buyer = arow.get("top_buyer", top_buyer)
+                    top_buyer_conc = arow.get("top_buyer_concentration", top_buyer_conc)
+                    total_net_value = arow.get("total_net_value", total_net_value)
+
+    # normalisasi angka
+    def num(v, default=0.0):
+        try:
+            x = float(v)
+            if not np.isfinite(x):
+                return default
+            return x
+        except Exception:
+            return default
+
+    close = num(row.get("close"))
+    ret_1 = num(row.get("ret_1"))
+    vol_ratio = num(row.get("vol_ratio"), default=0.0)
+    top_buyer_conc = num(top_buyer_conc, default=0.0)  # 0..1
+    total_net_value = num(total_net_value, default=0.0)
+
+    # prediksi model (jika tersedia)
+    if ART is not None:
+        thr_raw = threshold if threshold is not None else ART.get("threshold_default", THRESHOLD_DEFAULT)
+        thr = float(max(0.01, min(1.0, thr_raw)))
+        feats = build_feature_row_from_snapshot_row(row)
+        X = np.array([[feats.get(f, 0.0) for f in ART["features"]]], dtype=float)
+        prob_up = float(_clf_proba(ART["model"], X)[0])
+        label = int(prob_up >= thr)
+    else:
+        thr = float(max(0.01, min(1.0, threshold if threshold is not None else THRESHOLD_DEFAULT)))
+        prob_up = 0.0
+        label = 0
+
+    # keputusan sederhana & bullets (bahasa ringan)
+    if ret_1 <= -0.05:
+        reason_simple = "JUAL KUAT (harga turun ≥5% → disiplin stop-loss)"
+    elif prob_up >= thr:
+        reason_simple = "BELI (probabilitas naik melewati ambang)"
+    else:
+        reason_simple = "TIDAK ADA SINYAL BELI (probabilitas masih di bawah ambang)"
+
+    bullets: list[str] = []
+    if ART is None:
+        bullets.append("Model belum siap, penjelasan berbasis data volume & broker.")
+    else:
+        bullets.append(f"Model menilai peluang naik {prob_up:.2f} dengan ambang {thr:.2f}.")
+
+    # volume & likuiditas
+    if vol_ratio >= 20:
+        bullets.append(f"Volume sangat padat (vol ratio {vol_ratio:.2f}× rata-rata 20 hari).")
+    elif vol_ratio >= 10:
+        bullets.append(f"Volume padat (vol ratio {vol_ratio:.2f}× MA20).")
+    elif vol_ratio >= 3:
+        bullets.append(f"Volume mulai aktif (vol ratio {vol_ratio:.2f}× MA20).")
+    else:
+        bullets.append(f"Volume relatif biasa (vol ratio {vol_ratio:.2f}× MA20).")
+
+    # broker concentration
+    if top_buyer:
+        pct = top_buyer_conc * 100.0
+        if pct >= 40:
+            bullets.append(f"Ada dominasi {top_buyer} (konsentrasi {pct:.1f}%).")
+        elif pct >= 20:
+            bullets.append(f"{top_buyer} tampak aktif (konsentrasi {pct:.1f}%).")
+        else:
+            bullets.append(f"Aktivitas broker tersebar (top buyer {top_buyer}, {pct:.1f}%).")
+    else:
+        bullets.append("Data broker harian tidak tersedia untuk tanggal ini.")
+
+    # harga & return 1D
+    bullets.append(
+        f"Harga penutupan {int(close):,} dengan return 1D {ret_1*100:.1f}%."
+        .replace(",", ".")  # format lokal ID sederhana
+    )
+
+    return {
+        "symbol": sym,
+        "date": str(eff_date or row.get("date") or ""),
+        "close": close,
+        "ret_1": ret_1,
+        "vol_ratio": vol_ratio,
+        "top_buyer": (None if pd.isna(top_buyer) else (str(top_buyer) if top_buyer is not None else None)),
+        "top_buyer_concentration": top_buyer_conc,  # 0..1
+        "total_net_value": total_net_value,
+        "prob_up": prob_up,
+        "label": label,
+        "threshold_used": thr,
+        "reason_simple": reason_simple,
+        "bullets": bullets,
     }
