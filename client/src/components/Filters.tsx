@@ -37,11 +37,30 @@ type Props = {
 };
 
 const Filters: React.FC<Props> = ({
-  dateFrom, dateTo, broker, brokerOptions, priceCond, priceValue, threshold,
-  signal, symbolExact, sortDate, volRatioMin,
-  setDateFrom, setDateTo, setBroker, setPriceCond, setPriceValue, setThreshold,
-  setSignal, setSymbolExact, setSortDate, setVolRatioMin,
-  onApply, onReset, busy,
+  dateFrom,
+  dateTo,
+  broker,
+  brokerOptions,
+  priceCond,
+  priceValue,
+  threshold,
+  signal,
+  symbolExact,
+  sortDate,
+  volRatioMin,
+  setDateFrom,
+  setDateTo,
+  setBroker,
+  setPriceCond,
+  setPriceValue,
+  setThreshold,
+  setSignal,
+  setSymbolExact,
+  setSortDate,
+  setVolRatioMin,
+  onApply,
+  onReset,
+  busy,
 }) => {
   const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.trim();
@@ -58,12 +77,12 @@ const Filters: React.FC<Props> = ({
   };
 
   // === THRESHOLD (input angka persen) ===
-  // Kita tampilkan dalam persen 0..100, tapi state internal tetap 0..1
+  // Tampil 0..100, state internal tetap 0..1
   const thresholdPct = Math.round((Number.isFinite(threshold) ? threshold : 0) * 100);
   const handleThresholdPctChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     if (raw === "") {
-      // kalau dikosongkan, jangan ubah state supaya tidak bikin 0 mendadak
+      // dikosongkan → jangan ubah state
       return;
     }
     let pct = Number(raw);
@@ -99,9 +118,11 @@ const Filters: React.FC<Props> = ({
           <select
             className="select mt-1 w-full"
             value={signal}
-            onChange={(e) => setSignal(e.target.value as any)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+              setSignal(e.target.value as "Semua" | "BELI" | "JUAL")
+            }
           >
-            <option>Semua</option>
+            <option value="Semua">Semua</option>
             <option value="BELI">BELI</option>
             <option value="JUAL">JUAL</option>
           </select>
@@ -120,7 +141,9 @@ const Filters: React.FC<Props> = ({
           <select
             className="select mt-1 w-full"
             value={sortDate}
-            onChange={(e) => setSortDate(e.target.value as any)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+              setSortDate(e.target.value as "asc" | "desc")
+            }
           >
             <option value="desc">DESC (terbaru dulu)</option>
             <option value="asc">ASC (terlama dulu)</option>
@@ -134,7 +157,9 @@ const Filters: React.FC<Props> = ({
             onChange={(e) => setBroker(e.target.value)}
           >
             {brokerOptions.map((b) => (
-              <option key={b} value={b}>{b}</option>
+              <option key={b} value={b}>
+                {b}
+              </option>
             ))}
           </select>
         </div>
@@ -145,7 +170,9 @@ const Filters: React.FC<Props> = ({
             <select
               className="select mt-1 w-full"
               value={priceCond}
-              onChange={(e) => setPriceCond(e.target.value as PriceCond)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                setPriceCond(e.target.value as PriceCond)
+              }
             >
               <option value="diatas">Diatas</option>
               <option value="dibawah">Dibawah</option>
@@ -190,7 +217,8 @@ const Filters: React.FC<Props> = ({
             placeholder="Contoh: 70"
           />
           <div className="mt-1 text-xs text-slate-500">
-            Saat ini: {thresholdPct}% (probabilitas naik). Backend akan memakai { (threshold).toFixed(2) }.
+            Saat ini: {thresholdPct}% (probabilitas naik). Backend akan memakai{" "}
+            {threshold.toFixed(2)}.
           </div>
         </div>
       </div>
