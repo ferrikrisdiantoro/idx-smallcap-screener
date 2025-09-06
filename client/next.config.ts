@@ -3,12 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
 
-  // >>> PENTING: sesuaikan dengan prefix tempat app kamu di-hosting
-  // Jika Apache/Nginx mem-proxy di /app, set basePath ke "/app"
+  // PENTING: karena app diakses di http://...:8080/app/
   basePath: "/app",
-
-  // Jangan set assetPrefix kalau proxy sudah meneruskan /app/_next/*
-  // assetPrefix: "/app", // HANYA kalau proxy/CDN kamu butuh ini
 };
 
 export default nextConfig;
