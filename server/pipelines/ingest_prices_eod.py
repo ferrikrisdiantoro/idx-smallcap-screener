@@ -2,8 +2,9 @@
 Usage:
   DATA_DIR=./data python3 pipelines/ingest_prices_eod.py 2025-09-02 /path/to/vendor.csv|/path/dir|glob|-|goapi
 
-Perbaikan penting:
-- Normalisasi & pembersihan: treat close<=0 sebagai NaN supaya tidak ikut prediksi.
+Catatan:
+- Kolom output: symbol, date(asof), close, volume, source_date(bar asli).
+- "close<=0" dibersihkan -> NaN.
 """
 
 import os
@@ -17,7 +18,7 @@ from typing import Optional, List, Dict, Any
 import pandas as pd
 import numpy as np
 
-# ==== Load .env ====
+# ==== Load .env (opsional) ====
 try:
     from dotenv import load_dotenv, find_dotenv
     _env_file = os.environ.get("ENV_FILE")
@@ -29,7 +30,7 @@ except Exception:
     pass
 
 # ==== Config umum ====
-DATA_DIR = os.environ.get("DATA_DIR", "data")
+DATA_DIR = os.environ.get("DATA_DIR", "data").rstrip("/")
 
 # ==== GoAPI config ====
 GOAPI_BASE_URL = os.environ.get("GOAPI_BASE_URL", "https://api.goapi.io").rstrip("/")
@@ -59,7 +60,6 @@ def _pick_latest_csv(path: str) -> Optional[str]:
         return None
     if os.path.isfile(path):
         return path
-    candidates: List[str] = []
     if os.path.isdir(path):
         candidates = glob.glob(os.path.join(path, "*.csv"))
     else:
@@ -96,7 +96,6 @@ def _read_symbols() -> pd.DataFrame:
     path = os.path.join(DATA_DIR, "nama_saham.csv")
     if not os.path.exists(path):
         raise FileNotFoundError(f"File simbol tidak ditemukan: {path}")
-
     df = pd.read_csv(path)
     cols_norm = {_norm(c): c for c in df.columns}
     candidates = [
@@ -133,9 +132,7 @@ def _read_symbols() -> pd.DataFrame:
         .str.replace(r"\s+", "", regex=True)
         .str.upper()
     )
-    out = out[out["symbol"].str.len() > 0]
-    out = out.drop_duplicates("symbol").sort_values("symbol", kind="stable").reset_index(drop=True)
-
+    out = out[out["symbol"].str.len() > 0].drop_duplicates("symbol").sort_values("symbol").reset_index(drop=True)
     if out.empty:
         raise RuntimeError("Daftar simbol kosong setelah normalisasi. Cek isi nama_saham.csv Anda.")
     print(f"[ingest] symbols: {len(out)} ditemukan. contoh: {out['symbol'].head(5).tolist()}")
@@ -164,7 +161,7 @@ def _read_vendor_maybe(vendor_hint: Optional[str], asof: str) -> pd.DataFrame:
 
     if c_sym is None or c_clo is None:
         avail = ", ".join([str(c) for c in df.columns])
-        print("[ingest] WARNING: CSV vendor tidak memiliki kolom minimum (symbol & close). "
+        print("[ingest] WARNING: CSV vendor tidak punya minimal kolom (symbol & close). "
               f"Kolom tersedia: [{avail}]. Melewati vendor.")
         return pd.DataFrame(columns=["symbol", "close", "volume", "date"])
 
@@ -221,7 +218,6 @@ def _goapi_fetch_one(symbol: str, asof: str, lookback_days: int) -> Dict[str, An
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
-    # 1) Cari bar tepat asof, 2) fallback ke terakhir ≤ asof
     sub = df[df["date"] == asof]
     if not sub.empty:
         r = sub.iloc[-1]
@@ -291,18 +287,16 @@ def main(asof: str, vendor_hint: Optional[str]):
         vendor_df = _goapi_fetch_all(symbols, asof, GOAPI_LOOKBACK_DAYS)
 
     # --- NORMALISASI TANGGAL ---
-    # Simpan tanggal bar asli di 'source_date', dan paksa kolom 'date' menjadi asof agar konsisten.
     if "date" in vendor_df.columns:
         vendor_df = vendor_df.rename(columns={"date": "source_date"})
     else:
         vendor_df["source_date"] = asof
     vendor_df["date"] = asof  # effective date untuk snapshot
 
-    # --- PERBAIKAN: pembersihan nilai ---
+    # --- BERSIHKAN NILAI ---
     if not vendor_df.empty:
         vendor_df["close"]  = pd.to_numeric(vendor_df["close"], errors="coerce")
         vendor_df["volume"] = pd.to_numeric(vendor_df["volume"], errors="coerce")
-        # treat harga tidak valid sebagai NaN
         vendor_df.loc[(vendor_df["close"] <= 0) | (vendor_df["close"].isna()), "close"] = np.nan
         vendor_df.loc[vendor_df["volume"] < 0, "volume"] = 0
 
@@ -315,7 +309,6 @@ def main(asof: str, vendor_hint: Optional[str]):
             "source_date": "last"
         })
 
-    # Join ke daftar simbol agar semua simbol keluar
     merged = syms_df.merge(vendor_df, on="symbol", how="left")
     merged["date"] = merged["date"].fillna(asof)
     if "source_date" not in merged.columns:
@@ -326,7 +319,6 @@ def main(asof: str, vendor_hint: Optional[str]):
     out.to_csv(out_path, index=False)
     print(f"[ingest] wrote {len(out):,} rows -> {out_path}")
 
-    # Ringkasan kualitas data
     missing_close = int(out["close"].isna().sum())
     n_asof = int((out["source_date"] == asof).sum())
     n_fallback = len(out) - n_asof
