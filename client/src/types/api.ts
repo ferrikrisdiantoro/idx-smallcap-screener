@@ -42,12 +42,15 @@ export type PredictResp = {
 };
 
 // ==== Signals ====
+// tambahkan harga_now & kenaikan_pct
 export type SignalsResp = {
   rows: {
     tanggal: string;
     saham: string;
     sinyal: "BELI" | "JUAL KUAT";
     harga: number;
+    harga_now: number;      // NEW
+    kenaikan_pct: number;   // NEW (dalam %)
     akumulasi_pct: number;
     distribusi_pct: number;
     alasan: string;
@@ -58,7 +61,7 @@ export type SignalsResp = {
   threshold: number;
 };
 
-// ==== Explain (NEW) ====
+// ==== Explain (opsional dipakai di halaman detail) ====
 export type ExplainResp = {
   symbol: string;
   date: string;

@@ -2,7 +2,7 @@
 # ============================================
 # IDX Up-Move Predictor API (stable JSON + signals + explain)
 # - Safe JSONResponse (sanitize deep: NaN/Inf → null, numpy/pandas -> python)
-# - /signals menjamin angka selalu numeric (fallback 0)
+# - /signals menambahkan harga_now & kenaikan_pct
 # - /explain memberi alasan sederhana + parameter (volume & broker)
 # ============================================
 
@@ -87,7 +87,7 @@ PREDICT_BATCH_LIMIT = int(os.environ.get("PREDICT_BATCH_LIMIT", "5000"))
 
 app = FastAPI(
     title="IDX Up-Move Predictor API",
-    version="0.4.6",
+    version="0.4.7",
     default_response_class=SafeJSONResponse,
 )
 app.add_middleware(
@@ -384,11 +384,27 @@ def signals(
     Sapu snapshot per-hari di rentang [from..to], hitung sinyal dengan batch predict,
     dan join broker_agg (hanya jika tanggalnya SAMA) bila ada.
     Nilai akumulasi/distribusi DIJAMIN numeric (fallback 0.0).
+    Tambahan: harga_now (dari snapshot terbaru) & kenaikan_pct sejak sinyal.
     """
     if ART is None:
         return {"rows": [], "from": date_from, "to": date_to, "threshold": threshold}
 
     thr = float(max(0.01, min(1.0, threshold)))  # clamp supaya tidak 0
+
+    # --- ambil harga terbaru dari snapshot paling akhir ---
+    latest_path = load_latest_file("daily_snapshot_*.csv")
+    latest_map: dict[str, float] = {}
+    if latest_path:
+        _ldf = pd.read_csv(latest_path)
+        if not _ldf.empty and "symbol" in _ldf.columns:
+            _ldf["symbol"] = _ldf["symbol"].astype(str).str.upper()
+            _ldf["close"] = pd.to_numeric(_ldf.get("close"), errors="coerce")
+            latest_map = (
+                _ldf.dropna(subset=["close"])
+                    .set_index("symbol")["close"]
+                    .astype(float)
+                    .to_dict()
+            )
 
     dates = pd.date_range(pd.to_datetime(date_from), pd.to_datetime(date_to), freq="D")
     all_rows: List[Dict[str, Any]] = []
@@ -442,11 +458,25 @@ def signals(
             akum = max(0.0, tb_conc * 100.0)      # 0..100
             dist = max(0.0, 100.0 - akum)         # 0..100
 
+            # harga saat sinyal (hari dstr)
             harga_raw = r.get("close", 0)
             try:
                 harga = float(harga_raw) if not pd.isna(harga_raw) else 0.0
             except Exception:
                 harga = 0.0
+
+            # harga terbaru dari snapshot paling akhir (fallback: harga sinyal)
+            sym = str(r["symbol"])
+            _hnow = latest_map.get(sym)
+            try:
+                harga_now = float(_hnow) if (_hnow is not None and np.isfinite(_hnow)) else harga
+            except Exception:
+                harga_now = harga
+
+            # % kenaikan sejak sinyal
+            kenaikan_pct = 0.0
+            if harga > 0 and harga_now > 0:
+                kenaikan_pct = (harga_now / harga - 1.0) * 100.0
 
             alasan = (
                 "Stop loss: harga turun ≥5% dari penutupan"
@@ -456,9 +486,11 @@ def signals(
 
             all_rows.append({
                 "tanggal": dstr,
-                "saham": str(r["symbol"]),
+                "saham": sym,
                 "sinyal": sig,
                 "harga": harga,
+                "harga_now": harga_now,           # NEW
+                "kenaikan_pct": kenaikan_pct,     # NEW
                 "akumulasi_pct": akum,
                 "distribusi_pct": dist,
                 "alasan": alasan,
